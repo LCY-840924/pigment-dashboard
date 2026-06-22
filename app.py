@@ -40,7 +40,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 
 # For local testing, you can uncomment and set your URL here (but better to use .env)
 if not DATABASE_URL:
-    DATABASE_URL = "postgresql://postgres:Liewcy%40201261@db.xxxxxxxxxx.supabase.co:5432/postgres"
+    DATABASE_URL = "postgresql://postgres.soksnhhthrmdrzfeglce:Liewcy%40201261@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres"
     # Replace the above with your actual Supabase URL
 
 # Create engine with connection pooling and SSL
