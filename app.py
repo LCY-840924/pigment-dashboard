@@ -33,12 +33,12 @@ def decode_qr_from_image(image):
         pass
     return None
 
-# ---------- DATABASE SETUP (PostgreSQL / Neon) ----------
+# ---------- DATABASE SETUP (Prisma Postgres) ----------
 # Use environment variable if set (Streamlit Cloud Secrets)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 if not DATABASE_URL:
-    # Fallback for local testing – REPLACE with your real Neon URL if needed
+    # Fallback for local testing – REPLACE with your real Prisma pooled URL if needed
     DATABASE_URL = "postgresql://b5fecb8071b2785dfa0f4b9e7559c0006a566217ba5dac0c28b879c22c90ab91:sk_NLK97zW9DmkM8Qcp31tYK@pooled.db.prisma.io:5432/postgres?sslmode=require"
 
 engine = create_engine(DATABASE_URL)
@@ -164,7 +164,8 @@ def add_log(username, action, details, batch_number=None, recipe_id=None):
     except:
         pass
 
-# ---------- DATABASE FUNCTIONS ----------
+# ---------- DATABASE FUNCTIONS (with caching) ----------
+@st.cache_data(ttl=300)
 def get_colour_codes():
     conn = get_db_connection()
     df = pd.read_sql_query("SELECT * FROM colour_codes ORDER BY code", conn)
@@ -217,6 +218,7 @@ def delete_colour_code(code_id, username):
     except Exception as e:
         return False, str(e)
 
+@st.cache_data(ttl=300)
 def get_recipes():
     conn = get_db_connection()
     query = """
@@ -334,13 +336,15 @@ def delete_recipe(recipe_id, username):
     except Exception as e:
         return False, str(e)
 
-# ---------- BATCH FUNCTIONS ----------
+# ---------- BATCH FUNCTIONS (with caching) ----------
+@st.cache_data(ttl=300)
 def get_batches():
     conn = get_db_connection()
     df = pd.read_sql_query("SELECT * FROM batches ORDER BY created_at DESC", conn)
     conn.close()
     return df
 
+@st.cache_data(ttl=300)
 def get_completed_batches():
     conn = get_db_connection()
     df = pd.read_sql_query("SELECT * FROM batches WHERE status = 'Completed' ORDER BY created_at DESC", conn)
@@ -446,7 +450,8 @@ def update_qa(batch_id, tsc, ph, visc, de, dl, da, db, colour_strength, remark, 
     add_log(username, "Submit QA", f"QA submitted for batch {batch_number}, result: {msg}", batch_number=batch_number)
     return msg
 
-# ---------- USER MANAGEMENT ----------
+# ---------- USER MANAGEMENT (with caching) ----------
+@st.cache_data(ttl=300)
 def get_users():
     conn = get_db_connection()
     df = pd.read_sql_query("SELECT username, role FROM users ORDER BY username", conn)
@@ -486,6 +491,7 @@ def check_login(username, password):
     conn.close()
     return row
 
+@st.cache_data(ttl=300)
 def get_logs():
     conn = get_db_connection()
     df = pd.read_sql_query("SELECT * FROM logs ORDER BY timestamp DESC", conn)
@@ -723,7 +729,7 @@ login()
 # ---- Sidebar debug ----
 st.sidebar.write("---")
 st.sidebar.write("**Database Status**")
-st.sidebar.write(f"Using: PostgreSQL (Neon)")
+st.sidebar.write(f"Using: Prisma Postgres (pooled)")
 st.sidebar.write(f"Init: {init_msg}")
 
 # ---- Role helpers ----
@@ -1132,6 +1138,8 @@ with tabs[wip_index]:
     st.header("📋 4. Live WIP Progress")
     df_all = get_batches()
     active = df_all[df_all['status'] != 'Completed']
+    # Limit to 20 active rows for speed
+    active = active.head(20)
     if active.empty:
         st.info("No active batches.")
     else:
@@ -1192,6 +1200,8 @@ with tabs[report_index]:
             colours = completed_df['colour_code'].unique().tolist()
             selected_colour = st.selectbox("Select Colour Code", sorted(colours))
             filtered_df = completed_df[completed_df['colour_code'] == selected_colour]
+            # Keep only 50 most recent for speed
+            filtered_df = filtered_df.tail(50)
             if filtered_df.empty:
                 st.warning(f"No completed batches for {selected_colour}")
             else:
@@ -1235,7 +1245,7 @@ with tabs[report_index]:
                     else:
                         col_idx += 1
 
-                fig.update_layout(height=1000, showlegend=False, title_text=f"SPC Chart: {selected_colour}")
+                fig.update_layout(height=800, showlegend=False, title_text=f"SPC Chart: {selected_colour}")
                 fig.update_xaxes(tickangle=45)
                 st.plotly_chart(fig, use_container_width=True)
 
@@ -1388,7 +1398,8 @@ with tabs[report_index]:
                     )
 
                     if st.button("📑 Generate COA PDF", type="primary"):
-                        pdf_buffer = generate_coa_pdf(batch_num, template, edited_results)
+                        with st.spinner("Generating PDF, please wait..."):
+                            pdf_buffer = generate_coa_pdf(batch_num, template, edited_results)
                         if pdf_buffer:
                             st.download_button(
                                 label="⬇ Download COA (PDF)",
