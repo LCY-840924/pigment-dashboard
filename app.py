@@ -12,6 +12,12 @@ from reportlab.lib import colors
 import os
 import traceback
 from sqlalchemy import create_engine, text
+import time
+
+# At the start of a slow function, e.g., get_recipes()
+start = time.time()
+df = pd.read_sql_query(query, conn)
+st.sidebar.write(f"get_recipes took: {time.time() - start:.2f}s")
 
 # ---------- QR DECODER ----------
 try:
