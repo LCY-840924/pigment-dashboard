@@ -189,7 +189,6 @@ def add_colour_code(code, description, username):
         )
         conn.commit()
         conn.close()
-        # Clear cache so new colour code appears immediately
         get_colour_codes.clear()
         add_log(username, "Add Colour Code", f"Added colour code {code}")
         return True, None
@@ -205,7 +204,6 @@ def update_colour_code(code_id, code, description, username):
         )
         conn.commit()
         conn.close()
-        # Clear cache
         get_colour_codes.clear()
         get_recipes.clear()
         add_log(username, "Update Colour Code", f"Updated colour code {code}")
@@ -226,7 +224,6 @@ def delete_colour_code(code_id, username):
         conn.execute(text("DELETE FROM colour_codes WHERE id = :id"), {"id": code_id})
         conn.commit()
         conn.close()
-        # Clear cache
         get_colour_codes.clear()
         get_recipes.clear()
         add_log(username, "Delete Colour Code", f"Deleted colour code ID {code_id}")
@@ -253,7 +250,8 @@ def get_recipes():
 
 def get_recipe_by_id(recipe_id):
     conn = get_db_connection()
-    df = pd.read_sql_query("SELECT * FROM recipes WHERE id = :id", conn, params={"id": recipe_id})
+    # FIX: use text() to enable named parameters
+    df = pd.read_sql_query(text("SELECT * FROM recipes WHERE id = :id"), conn, params={"id": recipe_id})
     conn.close()
     return df
 
@@ -261,7 +259,6 @@ def add_recipe(colour_code_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
                visc_min, visc_max, de_max, dl_tol, da_tol, db_tol, str_min, str_max, username):
     try:
         conn = get_db_connection()
-        # Check if recipe already exists for this colour code
         existing = conn.execute(
             text("SELECT id FROM recipes WHERE colour_code_id = :cc_id AND colour_name = :name"),
             {"cc_id": colour_code_id, "name": colour_name}
@@ -269,7 +266,6 @@ def add_recipe(colour_code_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
         if existing:
             conn.close()
             return False, f"Recipe '{colour_name}' already exists for this colour code."
-        # Insert new recipe
         result = conn.execute(
             text("""INSERT INTO recipes 
                      (colour_code_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
@@ -299,7 +295,6 @@ def add_recipe(colour_code_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
         recipe_id = result.fetchone()[0]
         conn.commit()
         conn.close()
-        # Clear cache so new recipe appears immediately
         get_recipes.clear()
         add_log(username, "Add Recipe", f"Added recipe {colour_name} (colour code ID {colour_code_id})", recipe_id=recipe_id)
         return True, recipe_id
@@ -400,7 +395,7 @@ def add_batch(batch_number, recipe_id, colour_code, manufacturing_date, username
     )
     conn.commit()
     conn.close()
-    get_batches.clear()  # Clear cache to reflect new batch
+    get_batches.clear()
     add_log(username, "Issue Batch", f"Issued batch {batch_number} for {colour_code}", batch_number=batch_number, recipe_id=recipe_id)
     return batch_number
 
@@ -561,7 +556,6 @@ def import_db_from_zip(zip_file):
                 df.to_sql(table, conn, if_exists='append', index=False)
     conn.commit()
     conn.close()
-    # Clear all caches after import
     get_colour_codes.clear()
     get_recipes.clear()
     get_batches.clear()
@@ -822,7 +816,6 @@ if is_admin():
                 conn.execute(text("DROP TABLE IF EXISTS logs CASCADE"))
                 conn.commit()
                 conn.close()
-                # Clear all caches
                 get_colour_codes.clear()
                 get_recipes.clear()
                 get_batches.clear()
