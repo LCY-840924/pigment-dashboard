@@ -4,5 +4,4 @@ plotly
 reportlab
 Pillow
 pyzbar
-psycopg2-binary
-sqlalchemy
+firebase-admin
