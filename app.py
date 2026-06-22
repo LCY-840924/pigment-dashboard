@@ -37,7 +37,7 @@ def decode_qr_from_image(image):
 DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     # Fallback – replace with your actual URL for local testing
-    DATABASE_URL = "postgresql://postgres:Liewcy@201261@db.soksnhhthrmdrzfeglce.supabase.co:5432/postgres"
+    DATABASE_URL = "postgresql://postgres:Liewcy%40201261@db.soksnhhthrmdrzfeglce.supabase.co:5432/postgres"
 
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
