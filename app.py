@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -347,7 +348,7 @@ def update_recipe(recipe_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
                      strength_min = :str_min, strength_max = :str_max
                    WHERE id = :id"""),
             {
-                "id": recipe_id,
+                "id": int(recipe_id),  # Ensure Python int
                 "name": colour_name,
                 "tsc_min": tsc_min,
                 "tsc_max": tsc_max,
@@ -374,6 +375,7 @@ def update_recipe(recipe_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
 def delete_recipe(recipe_id, username):
     try:
         conn = get_db_connection()
+        recipe_id = int(recipe_id)  # Ensure Python int
         res = conn.execute(
             text("SELECT COUNT(*) FROM batches WHERE recipe_id = :id"),
             {"id": recipe_id}
@@ -970,7 +972,8 @@ if is_admin():
                         st.info("No recipes yet.")
                     else:
                         for _, recipe in cc_recipes.iterrows():
-                            recipe_id = recipe['id']
+                            # Convert recipe['id'] to Python int immediately
+                            recipe_id = int(recipe['id'])
                             with st.container():
                                 col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
                                 with col1:
