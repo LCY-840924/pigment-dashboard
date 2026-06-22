@@ -249,16 +249,31 @@ def get_recipes():
     return df
 
 def get_recipe_by_id(recipe_id):
+    """
+    Fetch a recipe by its ID using a direct SQLAlchemy execution.
+    This avoids pandas.read_sql_query issues with named parameters.
+    """
     conn = get_db_connection()
-    # FIX: use text() to enable named parameters
-    df = pd.read_sql_query(text("SELECT * FROM recipes WHERE id = :id"), conn, params={"id": recipe_id})
-    conn.close()
-    return df
+    try:
+        result = conn.execute(text("SELECT * FROM recipes WHERE id = :id"), {"id": recipe_id})
+        rows = result.fetchall()
+        if rows:
+            columns = result.keys()
+            df = pd.DataFrame(rows, columns=columns)
+        else:
+            df = pd.DataFrame()
+        return df
+    except Exception as e:
+        st.error(f"Error fetching recipe: {e}")
+        return pd.DataFrame()
+    finally:
+        conn.close()
 
 def add_recipe(colour_code_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
                visc_min, visc_max, de_max, dl_tol, da_tol, db_tol, str_min, str_max, username):
     try:
         conn = get_db_connection()
+        # Check if recipe already exists
         existing = conn.execute(
             text("SELECT id FROM recipes WHERE colour_code_id = :cc_id AND colour_name = :name"),
             {"cc_id": colour_code_id, "name": colour_name}
