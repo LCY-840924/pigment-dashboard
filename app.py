@@ -39,7 +39,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 
 if not DATABASE_URL:
     # Fallback for local testing – REPLACE with your real Neon URL if needed
-    DATABASE_URL = "postgres://b5fecb8071b2785dfa0f4b9e7559c0006a566217ba5dac0c28b879c22c90ab91:sk_NLK97zW9DmkM8Qcp31tYK@pooled.db.prisma.io:5432/postgres?sslmode=require
+    DATABASE_URL = "postgres://b5fecb8071b2785dfa0f4b9e7559c0006a566217ba5dac0c28b879c22c90ab91:sk_NLK97zW9DmkM8Qcp31tYK@pooled.db.prisma.io:5432/postgres?sslmode=require"
 
 engine = create_engine(DATABASE_URL)
 
