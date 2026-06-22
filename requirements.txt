@@ -4,4 +4,4 @@ plotly
 reportlab
 Pillow
 pyzbar
-duckdb
+psycopg2-binary
