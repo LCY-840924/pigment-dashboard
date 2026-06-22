@@ -34,6 +34,19 @@ def decode_qr_from_image(image):
         pass
     return None
 
+# ---------- HELPER: Convert pandas/numpy values to Python native ----------
+def to_python_native(value):
+    """Convert numpy/pandas data types to Python native types."""
+    if hasattr(value, 'item'):  # numpy number
+        return value.item()
+    elif isinstance(value, (np.int64, np.float64, np.int32, np.float32)):
+        return value.item()
+    elif isinstance(value, pd.Series):
+        return value.tolist()
+    elif isinstance(value, pd.DataFrame):
+        return value.to_dict('records')
+    return value
+
 # ---------- DATABASE SETUP (Supabase via SQLAlchemy) ----------
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -251,10 +264,12 @@ def get_recipes():
 def get_recipe_by_id(recipe_id):
     """
     Fetch a recipe by its ID using a direct SQLAlchemy execution.
-    This avoids pandas.read_sql_query issues with named parameters.
+    Converts recipe_id to Python int to avoid numpy.int64 issues.
     """
     conn = get_db_connection()
     try:
+        # Ensure recipe_id is a Python int, not numpy.int64
+        recipe_id = int(recipe_id)
         result = conn.execute(text("SELECT * FROM recipes WHERE id = :id"), {"id": recipe_id})
         rows = result.fetchall()
         if rows:
@@ -1352,16 +1367,21 @@ with tabs[report_index]:
                     all_recipes = get_recipes()
                     matching = all_recipes[all_recipes['colour_code'] == batch['colour_code']]
                     if not matching.empty:
-                        new_recipe_id = matching.iloc[0]['id']
+                        # Convert numpy.int64 to Python int
+                        new_recipe_id = int(matching.iloc[0]['id'])
                         conn = get_db_connection()
-                        conn.execute(
-                            text("UPDATE batches SET recipe_id = :rid WHERE batch_number = :bn"),
-                            {"rid": new_recipe_id, "bn": batch_num}
-                        )
-                        conn.commit()
-                        conn.close()
-                        st.success(f"✅ Auto‑assigned recipe '{matching.iloc[0]['colour_name']}' to batch.")
-                        st.rerun()
+                        try:
+                            conn.execute(
+                                text("UPDATE batches SET recipe_id = :rid WHERE batch_number = :bn"),
+                                {"rid": new_recipe_id, "bn": batch_num}
+                            )
+                            conn.commit()
+                            st.success(f"✅ Auto‑assigned recipe '{matching.iloc[0]['colour_name']}' to batch.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Failed to update: {e}")
+                        finally:
+                            conn.close()
                     else:
                         st.info("No recipe with the same colour code. Please assign manually below.")
                         all_recipes = get_recipes()
@@ -1369,17 +1389,21 @@ with tabs[report_index]:
                             recipe_options = {f"{row['colour_code']} - {row['colour_name']}": row['id']
                                               for _, row in all_recipes.iterrows()}
                             selected_recipe_display = st.selectbox("Assign a recipe", list(recipe_options.keys()))
-                            new_recipe_id = recipe_options[selected_recipe_display]
+                            new_recipe_id = int(recipe_options[selected_recipe_display])
                             if st.button("🔄 Update Batch Recipe"):
                                 conn = get_db_connection()
-                                conn.execute(
-                                    text("UPDATE batches SET recipe_id = :rid WHERE batch_number = :bn"),
-                                    {"rid": new_recipe_id, "bn": batch_num}
-                                )
-                                conn.commit()
-                                conn.close()
-                                st.success(f"✅ Batch updated with recipe '{selected_recipe_display}'!")
-                                st.rerun()
+                                try:
+                                    conn.execute(
+                                        text("UPDATE batches SET recipe_id = :rid WHERE batch_number = :bn"),
+                                        {"rid": new_recipe_id, "bn": batch_num}
+                                    )
+                                    conn.commit()
+                                    st.success(f"✅ Batch updated with recipe '{selected_recipe_display}'!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"❌ Failed to update: {e}")
+                                finally:
+                                    conn.close()
                         else:
                             st.warning("No recipes available. Please define a recipe first.")
                 else:
