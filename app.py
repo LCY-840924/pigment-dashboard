@@ -1,4 +1,5 @@
 import streamlit as st
+import sqlite3
 import pandas as pd
 from datetime import datetime
 import plotly.graph_objects as go
@@ -11,8 +12,6 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 import os
 import traceback
-from sqlalchemy import create_engine, text
-
 
 # ---------- QR DECODER ----------
 try:
@@ -34,132 +33,103 @@ def decode_qr_from_image(image):
         pass
     return None
 
-# ---------- DATABASE SETUP (Prisma Postgres) ----------
-# Use environment variable if set (Streamlit Cloud Secrets)
-DATABASE_URL = os.environ.get("DATABASE_URL")
-
-if not DATABASE_URL:
-    # Fallback for local testing – REPLACE with your real Prisma pooled URL if needed
-    DATABASE_URL = "postgresql://b5fecb8071b2785dfa0f4b9e7559c0006a566217ba5dac0c28b879c22c90ab91:sk_NLK97zW9DmkM8Qcp31tYK@pooled.db.prisma.io:5432/postgres?sslmode=require"
-
-engine = create_engine(DATABASE_URL)
+# ---------- DATABASE SETUP (SQLite with Persistent Disk) ----------
+# On Render, the persistent disk is mounted at /app/data.
+# Locally, we fall back to the current directory.
+DATA_DIR = "/app/data" if os.path.exists("/app/data") else "."
+DB_PATH = os.path.join(DATA_DIR, "pigment.db")
 
 def get_db_connection():
-    return engine.connect()
+    """Return a SQLite connection."""
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 def init_db():
     """Create tables if they don't exist, seed default data."""
     conn = get_db_connection()
-    try:
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS colour_codes (
-                id SERIAL PRIMARY KEY,
-                code TEXT UNIQUE NOT NULL,
-                description TEXT
-            )
-        """))
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS recipes (
-                id SERIAL PRIMARY KEY,
-                colour_code_id INTEGER NOT NULL REFERENCES colour_codes(id),
-                colour_name TEXT NOT NULL,
-                tsc_min REAL, tsc_max REAL, ph_min REAL, ph_max REAL,
-                visc_min REAL, visc_max REAL, de_max REAL,
-                dl_tolerance REAL DEFAULT 0.5, da_tolerance REAL DEFAULT 0.6,
-                db_tolerance REAL DEFAULT 0.6, strength_min REAL DEFAULT 95.0,
-                strength_max REAL DEFAULT 105.0,
-                UNIQUE(colour_code_id, colour_name)
-            )
-        """))
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS batches (
-                batch_id TEXT PRIMARY KEY,
-                batch_number TEXT UNIQUE,
-                recipe_id INTEGER REFERENCES recipes(id),
-                colour_code TEXT,
-                status TEXT, stage TEXT,
-                tsc REAL, ph REAL, visc REAL,
-                de REAL, dl REAL, da REAL, db REAL, colour_strength REAL,
-                manufacturing_date TEXT, attempt_count INTEGER DEFAULT 0,
-                remark TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """))
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS seq_counter (
-                colour_code TEXT PRIMARY KEY, last_seq INTEGER DEFAULT 0
-            )
-        """))
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS users (
-                username TEXT PRIMARY KEY,
-                password TEXT NOT NULL,
-                role TEXT NOT NULL
-            )
-        """))
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS logs (
-                log_id SERIAL PRIMARY KEY,
-                timestamp TEXT,
-                username TEXT,
-                action TEXT,
-                details TEXT,
-                batch_number TEXT,
-                recipe_id INTEGER
-            )
-        """))
-
-        # Seed default users (only if empty)
-        res = conn.execute(text("SELECT COUNT(*) FROM users")).fetchone()
-        if res[0] == 0:
-            default_users = [
-                ("admin", "admin123", "Admin"),
-                ("production", "prod123", "Production"),
-                ("qa", "qa123", "QA")
-            ]
-            for u in default_users:
-                conn.execute(
-                    text("INSERT INTO users (username, password, role) VALUES (:u, :p, :r)"),
-                    {"u": u[0], "p": u[1], "r": u[2]}
-                )
-
+    c = conn.cursor()
+    # Check if colour_codes table exists
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='colour_codes'")
+    if c.fetchone() is None:
+        # Tables don't exist, create them
+        c.execute("PRAGMA foreign_keys = OFF;")
+        c.execute('''CREATE TABLE colour_codes (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        code TEXT UNIQUE NOT NULL,
+                        description TEXT
+                    )''')
+        c.execute('''CREATE TABLE recipes (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        colour_code_id INTEGER NOT NULL,
+                        colour_name TEXT NOT NULL,
+                        tsc_min REAL, tsc_max REAL, ph_min REAL, ph_max REAL,
+                        visc_min REAL, visc_max REAL, de_max REAL,
+                        dl_tolerance REAL DEFAULT 0.5, da_tolerance REAL DEFAULT 0.6,
+                        db_tolerance REAL DEFAULT 0.6, strength_min REAL DEFAULT 95.0,
+                        strength_max REAL DEFAULT 105.0,
+                        UNIQUE(colour_code_id, colour_name)
+                    )''')
+        c.execute('''CREATE TABLE batches (
+                        batch_id TEXT PRIMARY KEY,
+                        batch_number TEXT UNIQUE,
+                        recipe_id INTEGER,
+                        colour_code TEXT,
+                        status TEXT, stage TEXT,
+                        tsc REAL, ph REAL, visc REAL,
+                        de REAL, dl REAL, da REAL, db REAL, colour_strength REAL,
+                        manufacturing_date TEXT, attempt_count INTEGER DEFAULT 0,
+                        remark TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )''')
+        c.execute('''CREATE TABLE seq_counter (
+                        colour_code TEXT PRIMARY KEY, last_seq INTEGER DEFAULT 0
+                    )''')
+        c.execute('''CREATE TABLE users (
+                        username TEXT PRIMARY KEY,
+                        password TEXT NOT NULL,
+                        role TEXT NOT NULL
+                    )''')
+        c.execute('''CREATE TABLE logs (
+                        log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT,
+                        username TEXT,
+                        action TEXT,
+                        details TEXT,
+                        batch_number TEXT,
+                        recipe_id INTEGER
+                    )''')
+        c.execute("PRAGMA foreign_keys = ON;")
+        # Seed default users
+        default_users = [
+            ("admin", "admin123", "Admin"),
+            ("production", "prod123", "Production"),
+            ("qa", "qa123", "QA")
+        ]
+        c.executemany("INSERT INTO users (username, password, role) VALUES (?,?,?)", default_users)
         # Seed sample colour codes
-        res = conn.execute(text("SELECT COUNT(*) FROM colour_codes")).fetchone()
-        if res[0] == 0:
-            sample_codes = [
-                ("RED", "Red shades"),
-                ("BLUE", "Blue shades"),
-                ("GREEN", "Green shades"),
-                ("YELLOW", "Yellow shades")
-            ]
-            for c in sample_codes:
-                conn.execute(
-                    text("INSERT INTO colour_codes (code, description) VALUES (:code, :desc)"),
-                    {"code": c[0], "desc": c[1]}
-                )
-
+        sample_codes = [
+            ("RED", "Red shades"),
+            ("BLUE", "Blue shades"),
+            ("GREEN", "Green shades"),
+            ("YELLOW", "Yellow shades")
+        ]
+        c.executemany("INSERT INTO colour_codes (code, description) VALUES (?,?)", sample_codes)
         conn.commit()
-        return "Database initialized successfully."
-    except Exception as e:
-        conn.rollback()
-        return f"Error initializing DB: {str(e)}"
-    finally:
         conn.close()
+        return "Database initialized with sample data."
+    else:
+        conn.close()
+        return "Using existing database."
 
-# Run init_db and store message
+# Call init_db once at startup
 init_msg = init_db()
-if "Error" in init_msg:
-    st.error(f"⚠️ Database initialization failed: {init_msg}")
-    st.stop()
 
 # ---------- LOGGING ----------
 def add_log(username, action, details, batch_number=None, recipe_id=None):
     try:
         conn = get_db_connection()
+        c = conn.cursor()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        conn.execute(
-            text("INSERT INTO logs (timestamp, username, action, details, batch_number, recipe_id) VALUES (:ts, :u, :a, :d, :b, :r)"),
-            {"ts": timestamp, "u": username, "a": action, "d": details, "b": batch_number, "r": recipe_id}
-        )
+        c.execute("INSERT INTO logs (timestamp, username, action, details, batch_number, recipe_id) VALUES (?,?,?,?,?,?)",
+                  (timestamp, username, action, details, batch_number, recipe_id))
         conn.commit()
         conn.close()
     except:
@@ -176,10 +146,8 @@ def get_colour_codes():
 def add_colour_code(code, description, username):
     try:
         conn = get_db_connection()
-        conn.execute(
-            text("INSERT INTO colour_codes (code, description) VALUES (:code, :desc)"),
-            {"code": code, "desc": description}
-        )
+        c = conn.cursor()
+        c.execute("INSERT INTO colour_codes (code, description) VALUES (?,?)", (code, description))
         conn.commit()
         conn.close()
         add_log(username, "Add Colour Code", f"Added colour code {code}")
@@ -190,10 +158,8 @@ def add_colour_code(code, description, username):
 def update_colour_code(code_id, code, description, username):
     try:
         conn = get_db_connection()
-        conn.execute(
-            text("UPDATE colour_codes SET code = :code, description = :desc WHERE id = :id"),
-            {"code": code, "desc": description, "id": code_id}
-        )
+        c = conn.cursor()
+        c.execute("UPDATE colour_codes SET code=?, description=? WHERE id=?", (code, description, code_id))
         conn.commit()
         conn.close()
         add_log(username, "Update Colour Code", f"Updated colour code {code}")
@@ -204,14 +170,12 @@ def update_colour_code(code_id, code, description, username):
 def delete_colour_code(code_id, username):
     try:
         conn = get_db_connection()
-        res = conn.execute(
-            text("SELECT COUNT(*) FROM recipes WHERE colour_code_id = :id"),
-            {"id": code_id}
-        ).fetchone()
-        if res[0] > 0:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM recipes WHERE colour_code_id = ?", (code_id,))
+        if c.fetchone()[0] > 0:
             conn.close()
             return False, "Cannot delete: there are recipes using this colour code."
-        conn.execute(text("DELETE FROM colour_codes WHERE id = :id"), {"id": code_id})
+        c.execute("DELETE FROM colour_codes WHERE id = ?", (code_id,))
         conn.commit()
         conn.close()
         add_log(username, "Delete Colour Code", f"Deleted colour code ID {code_id}")
@@ -238,7 +202,7 @@ def get_recipes():
 
 def get_recipe_by_id(recipe_id):
     conn = get_db_connection()
-    df = pd.read_sql_query("SELECT * FROM recipes WHERE id = :id", conn, params={"id": recipe_id})
+    df = pd.read_sql_query("SELECT * FROM recipes WHERE id = ?", conn, params=(recipe_id,))
     conn.close()
     return df
 
@@ -246,33 +210,14 @@ def add_recipe(colour_code_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
                visc_min, visc_max, de_max, dl_tol, da_tol, db_tol, str_min, str_max, username):
     try:
         conn = get_db_connection()
-        result = conn.execute(
-            text("""INSERT INTO recipes 
-                     (colour_code_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
-                      visc_min, visc_max, de_max, dl_tolerance, da_tolerance, db_tolerance,
-                      strength_min, strength_max)
-                   VALUES 
-                     (:cc_id, :name, :tsc_min, :tsc_max, :ph_min, :ph_max,
-                      :visc_min, :visc_max, :de_max, :dl_tol, :da_tol, :db_tol,
-                      :str_min, :str_max) RETURNING id"""),
-            {
-                "cc_id": colour_code_id,
-                "name": colour_name,
-                "tsc_min": tsc_min,
-                "tsc_max": tsc_max,
-                "ph_min": ph_min,
-                "ph_max": ph_max,
-                "visc_min": visc_min,
-                "visc_max": visc_max,
-                "de_max": de_max,
-                "dl_tol": dl_tol,
-                "da_tol": da_tol,
-                "db_tol": db_tol,
-                "str_min": str_min,
-                "str_max": str_max
-            }
-        )
-        recipe_id = result.fetchone()[0]
+        c = conn.cursor()
+        c.execute("""INSERT INTO recipes (colour_code_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
+                     visc_min, visc_max, de_max, dl_tolerance, da_tolerance, db_tolerance,
+                     strength_min, strength_max)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  (colour_code_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
+                   visc_min, visc_max, de_max, dl_tol, da_tol, db_tol, str_min, str_max))
+        recipe_id = c.lastrowid
         conn.commit()
         conn.close()
         add_log(username, "Add Recipe", f"Added recipe {colour_name} (colour code ID {colour_code_id})", recipe_id=recipe_id)
@@ -285,33 +230,15 @@ def update_recipe(recipe_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
                   str_min, str_max, username):
     try:
         conn = get_db_connection()
-        conn.execute(
-            text("""UPDATE recipes SET
-                     colour_name = :name,
-                     tsc_min = :tsc_min, tsc_max = :tsc_max,
-                     ph_min = :ph_min, ph_max = :ph_max,
-                     visc_min = :visc_min, visc_max = :visc_max,
-                     de_max = :de_max,
-                     dl_tolerance = :dl_tol, da_tolerance = :da_tol, db_tolerance = :db_tol,
-                     strength_min = :str_min, strength_max = :str_max
-                   WHERE id = :id"""),
-            {
-                "id": recipe_id,
-                "name": colour_name,
-                "tsc_min": tsc_min,
-                "tsc_max": tsc_max,
-                "ph_min": ph_min,
-                "ph_max": ph_max,
-                "visc_min": visc_min,
-                "visc_max": visc_max,
-                "de_max": de_max,
-                "dl_tol": dl_tol,
-                "da_tol": da_tol,
-                "db_tol": db_tol,
-                "str_min": str_min,
-                "str_max": str_max
-            }
-        )
+        c = conn.cursor()
+        c.execute("""UPDATE recipes SET
+                     colour_name=?, tsc_min=?, tsc_max=?, ph_min=?, ph_max=?,
+                     visc_min=?, visc_max=?, de_max=?,
+                     dl_tolerance=?, da_tolerance=?, db_tolerance=?,
+                     strength_min=?, strength_max=?
+                     WHERE id=?""",
+                  (colour_name, tsc_min, tsc_max, ph_min, ph_max, visc_min, visc_max,
+                   de_max, dl_tol, da_tol, db_tol, str_min, str_max, recipe_id))
         conn.commit()
         conn.close()
         add_log(username, "Update Recipe", f"Updated recipe ID {recipe_id}", recipe_id=recipe_id)
@@ -322,14 +249,12 @@ def update_recipe(recipe_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
 def delete_recipe(recipe_id, username):
     try:
         conn = get_db_connection()
-        res = conn.execute(
-            text("SELECT COUNT(*) FROM batches WHERE recipe_id = :id"),
-            {"id": recipe_id}
-        ).fetchone()
-        if res[0] > 0:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM batches WHERE recipe_id = ?", (recipe_id,))
+        if c.fetchone()[0] > 0:
             conn.close()
             return False, "Cannot delete recipe: it is used by one or more batches."
-        conn.execute(text("DELETE FROM recipes WHERE id = :id"), {"id": recipe_id})
+        c.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
         conn.commit()
         conn.close()
         add_log(username, "Delete Recipe", f"Deleted recipe ID {recipe_id}", recipe_id=recipe_id)
@@ -354,22 +279,19 @@ def get_completed_batches():
 
 def batch_exists(batch_number):
     conn = get_db_connection()
-    res = conn.execute(
-        text("SELECT 1 FROM batches WHERE batch_number = :bn"),
-        {"bn": batch_number}
-    ).fetchone()
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM batches WHERE batch_number = ?", (batch_number,))
+    exists = c.fetchone() is not None
     conn.close()
-    return res is not None
+    return exists
 
 def add_batch(batch_number, recipe_id, colour_code, manufacturing_date, username):
     conn = get_db_connection()
+    c = conn.cursor()
     batch_id = f"b_{batch_number}"
-    conn.execute(
-        text("""INSERT INTO batches 
-                 (batch_id, batch_number, recipe_id, colour_code, status, stage, manufacturing_date)
-               VALUES (:bid, :bn, :rid, :cc, 'Issued', 'Mixing', :mfg)"""),
-        {"bid": batch_id, "bn": batch_number, "rid": recipe_id, "cc": colour_code, "mfg": manufacturing_date}
-    )
+    c.execute(
+        "INSERT INTO batches (batch_id, batch_number, recipe_id, colour_code, status, stage, manufacturing_date) VALUES (?,?,?,?,?,?,?)",
+        (batch_id, batch_number, recipe_id, colour_code, 'Issued', 'Mixing', manufacturing_date))
     conn.commit()
     conn.close()
     add_log(username, "Issue Batch", f"Issued batch {batch_number} for {colour_code}", batch_number=batch_number, recipe_id=recipe_id)
@@ -377,35 +299,26 @@ def add_batch(batch_number, recipe_id, colour_code, manufacturing_date, username
 
 def update_status(batch_id, status, stage, username):
     conn = get_db_connection()
-    batch_number = conn.execute(
-        text("SELECT batch_number FROM batches WHERE batch_id = :bid"),
-        {"bid": batch_id}
-    ).fetchone()[0]
-    conn.execute(
-        text("UPDATE batches SET status = :status, stage = :stage WHERE batch_id = :bid"),
-        {"status": status, "stage": stage, "bid": batch_id}
-    )
+    c = conn.cursor()
+    c.execute("SELECT batch_number FROM batches WHERE batch_id = ?", (batch_id,))
+    batch_number = c.fetchone()[0]
+    c.execute("UPDATE batches SET status=?, stage=? WHERE batch_id=?", (status, stage, batch_id))
     conn.commit()
     conn.close()
     add_log(username, "Update Status", f"Batch {batch_number} status changed to {status} (stage: {stage})", batch_number=batch_number)
 
 def update_qa(batch_id, tsc, ph, visc, de, dl, da, db, colour_strength, remark, username):
     conn = get_db_connection()
-    batch_number = conn.execute(
-        text("SELECT batch_number FROM batches WHERE batch_id = :bid"),
-        {"bid": batch_id}
-    ).fetchone()[0]
-    row = conn.execute(
-        text("""SELECT tsc_min, tsc_max, ph_min, ph_max, visc_min, visc_max,
-                       de_max, dl_tolerance, da_tolerance, db_tolerance,
-                       strength_min, strength_max
-                FROM recipes r JOIN batches b ON r.id = b.recipe_id
-                WHERE b.batch_id = :bid"""),
-        {"bid": batch_id}
-    ).fetchone()
-    if not row:
-        conn.close()
-        return "❌ Recipe not found!"
+    c = conn.cursor()
+    c.execute("SELECT batch_number FROM batches WHERE batch_id = ?", (batch_id,))
+    batch_number = c.fetchone()[0]
+    c.execute("""SELECT tsc_min, tsc_max, ph_min, ph_max, visc_min, visc_max,
+                        de_max, dl_tolerance, da_tolerance, db_tolerance,
+                        strength_min, strength_max
+                 FROM recipes r JOIN batches b ON r.id = b.recipe_id
+                 WHERE b.batch_id = ?""", (batch_id,))
+    row = c.fetchone()
+    if not row: return "❌ Recipe not found!"
     tsc_min, tsc_max, ph_min, ph_max, visc_min, visc_max, de_max, dl_tol, da_tol, db_tol, str_min, str_max = row
 
     tsc_ok = tsc_min <= tsc <= tsc_max
@@ -418,10 +331,8 @@ def update_qa(batch_id, tsc, ph, visc, de, dl, da, db, colour_strength, remark, 
     strength_ok = str_min <= colour_strength <= str_max
     passed = all([tsc_ok, ph_ok, visc_ok, de_ok, dl_ok, da_ok, db_ok, strength_ok])
 
-    current_attempt = conn.execute(
-        text("SELECT attempt_count FROM batches WHERE batch_id = :bid"),
-        {"bid": batch_id}
-    ).fetchone()[0] or 0
+    c.execute("SELECT attempt_count FROM batches WHERE batch_id = ?", (batch_id,))
+    current_attempt = c.fetchone()[0] or 0
     new_attempt = current_attempt + 1
 
     if passed:
@@ -429,23 +340,11 @@ def update_qa(batch_id, tsc, ph, visc, de, dl, da, db, colour_strength, remark, 
     else:
         status, stage, msg = 'QA_Failed', 'Milling', '❌ QA FAILED! Back to Milling.'
 
-    conn.execute(
-        text("""UPDATE batches SET
-                 tsc = :tsc, ph = :ph, visc = :visc, de = :de,
-                 dl = :dl, da = :da, db = :db,
-                 colour_strength = :cs,
-                 status = :status, stage = :stage,
-                 attempt_count = :attempt, remark = :remark
-               WHERE batch_id = :bid"""),
-        {
-            "tsc": tsc, "ph": ph, "visc": visc, "de": de,
-            "dl": dl, "da": da, "db": db,
-            "cs": colour_strength,
-            "status": status, "stage": stage,
-            "attempt": new_attempt, "remark": remark,
-            "bid": batch_id
-        }
-    )
+    c.execute(
+        """UPDATE batches SET tsc=?, ph=?, visc=?, de=?, dl=?, da=?, db=?,
+           colour_strength=?, status=?, stage=?, attempt_count=?, remark=?
+           WHERE batch_id=?""",
+        (tsc, ph, visc, de, dl, da, db, colour_strength, status, stage, new_attempt, remark, batch_id))
     conn.commit()
     conn.close()
     add_log(username, "Submit QA", f"QA submitted for batch {batch_number}, result: {msg}", batch_number=batch_number)
@@ -461,34 +360,30 @@ def get_users():
 
 def add_user(username, password, role):
     conn = get_db_connection()
-    conn.execute(
-        text("INSERT INTO users (username, password, role) VALUES (:u, :p, :r)"),
-        {"u": username, "p": password, "r": role}
-    )
+    c = conn.cursor()
+    c.execute("INSERT INTO users (username, password, role) VALUES (?,?,?)", (username, password, role))
     conn.commit()
     conn.close()
 
 def update_user(username, password, role):
     conn = get_db_connection()
-    conn.execute(
-        text("UPDATE users SET password = :p, role = :r WHERE username = :u"),
-        {"p": password, "r": role, "u": username}
-    )
+    c = conn.cursor()
+    c.execute("UPDATE users SET password=?, role=? WHERE username=?", (password, role, username))
     conn.commit()
     conn.close()
 
 def delete_user(username):
     conn = get_db_connection()
-    conn.execute(text("DELETE FROM users WHERE username = :u"), {"u": username})
+    c = conn.cursor()
+    c.execute("DELETE FROM users WHERE username=?", (username,))
     conn.commit()
     conn.close()
 
 def check_login(username, password):
     conn = get_db_connection()
-    row = conn.execute(
-        text("SELECT username, role FROM users WHERE username = :u AND password = :p"),
-        {"u": username, "p": password}
-    ).fetchone()
+    c = conn.cursor()
+    c.execute("SELECT username, role FROM users WHERE username=? AND password=?", (username, password))
+    row = c.fetchone()
     conn.close()
     return row
 
@@ -517,11 +412,12 @@ def export_db_to_zip():
 
 def import_db_from_zip(zip_file):
     conn = get_db_connection()
+    c = conn.cursor()
     with zipfile.ZipFile(zip_file, 'r') as zipf:
         for table in ['colour_codes', 'recipes', 'batches', 'seq_counter', 'users', 'logs']:
             if f"{table}.csv" in zipf.namelist():
                 df = pd.read_csv(zipf.open(f"{table}.csv"))
-                conn.execute(text(f"DELETE FROM {table}"))
+                c.execute(f"DELETE FROM {table}")
                 df.to_sql(table, conn, if_exists='append', index=False)
     conn.commit()
     conn.close()
@@ -730,7 +626,8 @@ login()
 # ---- Sidebar debug ----
 st.sidebar.write("---")
 st.sidebar.write("**Database Status**")
-st.sidebar.write(f"Using: Prisma Postgres (pooled)")
+st.sidebar.write(f"Path: `{DB_PATH}`")
+st.sidebar.write(f"Exists: {os.path.exists(DB_PATH)}")
 st.sidebar.write(f"Init: {init_msg}")
 
 # ---- Role helpers ----
@@ -772,12 +669,13 @@ if is_admin():
         with col_db:
             if st.button("🗑️ Reset Database (All Data Lost!)", type="primary"):
                 conn = get_db_connection()
-                conn.execute(text("DROP TABLE IF EXISTS colour_codes CASCADE"))
-                conn.execute(text("DROP TABLE IF EXISTS recipes CASCADE"))
-                conn.execute(text("DROP TABLE IF EXISTS batches CASCADE"))
-                conn.execute(text("DROP TABLE IF EXISTS seq_counter CASCADE"))
-                conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
-                conn.execute(text("DROP TABLE IF EXISTS logs CASCADE"))
+                c = conn.cursor()
+                c.execute("DROP TABLE IF EXISTS colour_codes")
+                c.execute("DROP TABLE IF EXISTS recipes")
+                c.execute("DROP TABLE IF EXISTS batches")
+                c.execute("DROP TABLE IF EXISTS seq_counter")
+                c.execute("DROP TABLE IF EXISTS users")
+                c.execute("DROP TABLE IF EXISTS logs")
                 conn.commit()
                 conn.close()
                 init_msg = init_db()
@@ -1306,10 +1204,8 @@ with tabs[report_index]:
                     if not matching.empty:
                         new_recipe_id = matching.iloc[0]['id']
                         conn = get_db_connection()
-                        conn.execute(
-                            text("UPDATE batches SET recipe_id = :rid WHERE batch_number = :bn"),
-                            {"rid": new_recipe_id, "bn": batch_num}
-                        )
+                        c = conn.cursor()
+                        c.execute("UPDATE batches SET recipe_id = ? WHERE batch_number = ?", (new_recipe_id, batch_num))
                         conn.commit()
                         conn.close()
                         st.success(f"✅ Auto‑assigned recipe '{matching.iloc[0]['colour_name']}' to batch.")
@@ -1324,10 +1220,8 @@ with tabs[report_index]:
                             new_recipe_id = recipe_options[selected_recipe_display]
                             if st.button("🔄 Update Batch Recipe"):
                                 conn = get_db_connection()
-                                conn.execute(
-                                    text("UPDATE batches SET recipe_id = :rid WHERE batch_number = :bn"),
-                                    {"rid": new_recipe_id, "bn": batch_num}
-                                )
+                                c = conn.cursor()
+                                c.execute("UPDATE batches SET recipe_id = ? WHERE batch_number = ?", (new_recipe_id, batch_num))
                                 conn.commit()
                                 conn.close()
                                 st.success(f"✅ Batch updated with recipe '{selected_recipe_display}'!")
@@ -1445,11 +1339,10 @@ if is_admin():
                         add_log(st.session_state.username, "Add User", f"Added user {new_username}")
                         st.toast(f"✅ User {new_username} added!", icon="✅")
                         st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("❌ Username already exists!")
                     except Exception as e:
-                        if "duplicate key" in str(e).lower():
-                            st.error("❌ Username already exists!")
-                        else:
-                            st.error(f"❌ Error: {e}")
+                        st.error(f"❌ Error: {e}")
                 else:
                     st.error("❌ Username and password required.")
 
@@ -1475,10 +1368,9 @@ if is_admin():
                                     update_user(selected_user, new_pass, new_role)
                                 else:
                                     conn = get_db_connection()
-                                    old_pass = conn.execute(
-                                        text("SELECT password FROM users WHERE username = :u"),
-                                        {"u": selected_user}
-                                    ).fetchone()[0]
+                                    c = conn.cursor()
+                                    c.execute("SELECT password FROM users WHERE username=?", (selected_user,))
+                                    old_pass = c.fetchone()[0]
                                     conn.close()
                                     update_user(selected_user, old_pass, new_role)
                                 add_log(st.session_state.username, "Update User", f"Updated user {selected_user}")
