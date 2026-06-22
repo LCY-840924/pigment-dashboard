@@ -4,4 +4,3 @@ plotly
 reportlab
 Pillow
 pyzbar
-firebase-admin
