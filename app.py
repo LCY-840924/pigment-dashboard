@@ -384,7 +384,10 @@ def delete_user(username):
 
 def check_login(username, password):
     conn = get_db_connection()
-    row = conn.execute(text("SELECT username, role FROM users WHERE username=%s AND password=%s"), (username, password)).fetchone()
+    row = conn.execute(
+        text("SELECT username, role FROM users WHERE username = :username AND password = :password"),
+        {"username": username, "password": password}
+    ).fetchone()
     conn.close()
     return row
 
