@@ -4,4 +4,5 @@ plotly
 reportlab
 Pillow
 pyzbar
+sqlalchemy
 psycopg2-binary
