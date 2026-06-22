@@ -172,7 +172,7 @@ def add_log(username, action, details, batch_number=None, recipe_id=None):
     except:
         pass
 
-# ---------- DATABASE FUNCTIONS (with caching) ----------
+# ---------- DATABASE FUNCTIONS (with caching and cache clearing) ----------
 @st.cache_data(ttl=300)
 def get_colour_codes():
     conn = get_db_connection()
@@ -189,6 +189,8 @@ def add_colour_code(code, description, username):
         )
         conn.commit()
         conn.close()
+        # Clear cache so new colour code appears immediately
+        get_colour_codes.clear()
         add_log(username, "Add Colour Code", f"Added colour code {code}")
         return True, None
     except Exception as e:
@@ -203,6 +205,9 @@ def update_colour_code(code_id, code, description, username):
         )
         conn.commit()
         conn.close()
+        # Clear cache
+        get_colour_codes.clear()
+        get_recipes.clear()
         add_log(username, "Update Colour Code", f"Updated colour code {code}")
         return True, None
     except Exception as e:
@@ -221,6 +226,9 @@ def delete_colour_code(code_id, username):
         conn.execute(text("DELETE FROM colour_codes WHERE id = :id"), {"id": code_id})
         conn.commit()
         conn.close()
+        # Clear cache
+        get_colour_codes.clear()
+        get_recipes.clear()
         add_log(username, "Delete Colour Code", f"Deleted colour code ID {code_id}")
         return True, None
     except Exception as e:
@@ -253,6 +261,15 @@ def add_recipe(colour_code_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
                visc_min, visc_max, de_max, dl_tol, da_tol, db_tol, str_min, str_max, username):
     try:
         conn = get_db_connection()
+        # Check if recipe already exists for this colour code
+        existing = conn.execute(
+            text("SELECT id FROM recipes WHERE colour_code_id = :cc_id AND colour_name = :name"),
+            {"cc_id": colour_code_id, "name": colour_name}
+        ).fetchone()
+        if existing:
+            conn.close()
+            return False, f"Recipe '{colour_name}' already exists for this colour code."
+        # Insert new recipe
         result = conn.execute(
             text("""INSERT INTO recipes 
                      (colour_code_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
@@ -282,6 +299,8 @@ def add_recipe(colour_code_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
         recipe_id = result.fetchone()[0]
         conn.commit()
         conn.close()
+        # Clear cache so new recipe appears immediately
+        get_recipes.clear()
         add_log(username, "Add Recipe", f"Added recipe {colour_name} (colour code ID {colour_code_id})", recipe_id=recipe_id)
         return True, recipe_id
     except Exception as e:
@@ -321,6 +340,7 @@ def update_recipe(recipe_id, colour_name, tsc_min, tsc_max, ph_min, ph_max,
         )
         conn.commit()
         conn.close()
+        get_recipes.clear()
         add_log(username, "Update Recipe", f"Updated recipe ID {recipe_id}", recipe_id=recipe_id)
         return True, None
     except Exception as e:
@@ -339,6 +359,7 @@ def delete_recipe(recipe_id, username):
         conn.execute(text("DELETE FROM recipes WHERE id = :id"), {"id": recipe_id})
         conn.commit()
         conn.close()
+        get_recipes.clear()
         add_log(username, "Delete Recipe", f"Deleted recipe ID {recipe_id}", recipe_id=recipe_id)
         return True, None
     except Exception as e:
@@ -379,6 +400,7 @@ def add_batch(batch_number, recipe_id, colour_code, manufacturing_date, username
     )
     conn.commit()
     conn.close()
+    get_batches.clear()  # Clear cache to reflect new batch
     add_log(username, "Issue Batch", f"Issued batch {batch_number} for {colour_code}", batch_number=batch_number, recipe_id=recipe_id)
     return batch_number
 
@@ -394,6 +416,8 @@ def update_status(batch_id, status, stage, username):
     )
     conn.commit()
     conn.close()
+    get_batches.clear()
+    get_completed_batches.clear()
     add_log(username, "Update Status", f"Batch {batch_number} status changed to {status} (stage: {stage})", batch_number=batch_number)
 
 def update_qa(batch_id, tsc, ph, visc, de, dl, da, db, colour_strength, remark, username):
@@ -455,6 +479,8 @@ def update_qa(batch_id, tsc, ph, visc, de, dl, da, db, colour_strength, remark, 
     )
     conn.commit()
     conn.close()
+    get_batches.clear()
+    get_completed_batches.clear()
     add_log(username, "Submit QA", f"QA submitted for batch {batch_number}, result: {msg}", batch_number=batch_number)
     return msg
 
@@ -474,6 +500,7 @@ def add_user(username, password, role):
     )
     conn.commit()
     conn.close()
+    get_users.clear()
 
 def update_user(username, password, role):
     conn = get_db_connection()
@@ -483,12 +510,14 @@ def update_user(username, password, role):
     )
     conn.commit()
     conn.close()
+    get_users.clear()
 
 def delete_user(username):
     conn = get_db_connection()
     conn.execute(text("DELETE FROM users WHERE username = :u"), {"u": username})
     conn.commit()
     conn.close()
+    get_users.clear()
 
 def check_login(username, password):
     conn = get_db_connection()
@@ -532,6 +561,13 @@ def import_db_from_zip(zip_file):
                 df.to_sql(table, conn, if_exists='append', index=False)
     conn.commit()
     conn.close()
+    # Clear all caches after import
+    get_colour_codes.clear()
+    get_recipes.clear()
+    get_batches.clear()
+    get_completed_batches.clear()
+    get_users.clear()
+    get_logs.clear()
 
 # ---------- COA GENERATION ----------
 def generate_coa_pdf(batch_number, template, edited_results=None):
@@ -786,6 +822,13 @@ if is_admin():
                 conn.execute(text("DROP TABLE IF EXISTS logs CASCADE"))
                 conn.commit()
                 conn.close()
+                # Clear all caches
+                get_colour_codes.clear()
+                get_recipes.clear()
+                get_batches.clear()
+                get_completed_batches.clear()
+                get_users.clear()
+                get_logs.clear()
                 init_msg = init_db()
                 st.success("Database reset to default!")
                 st.rerun()
