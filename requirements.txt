@@ -4,3 +4,4 @@ plotly
 reportlab
 Pillow
 pyzbar
+duckdb
